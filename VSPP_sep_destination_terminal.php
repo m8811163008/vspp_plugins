@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: VSPP Sep Destination Terminal
- * Description: VSPP Sep Destination Terminal to catch request from source terminal and handle some payment processes.
- * Version:     2.0.0
+ * Description: VSPP Sep Destination Terminal to catch request from source terminal and handle some payment processes with built-in debugging.
+ * Version:     2.1.0
  * Author:      Vira System Paydar Pars and Gemini
  * Author URI:  http://vira-system-paydar-pars.ir/
  * License:     GPLv2 or later
@@ -46,7 +46,18 @@ class Destination_Sep_Gateway {
         );
     }
 
-
+    /**
+     * Helper function to write clean debug messages to wp-content/debug.log
+     */
+    private function log_debug( $message, $data = null ) {
+        if ( WP_DEBUG === true ) {
+            $log = '[VSPP Debug] ' . $message;
+            if ( null !== $data ) {
+                $log .= ' | Data: ' . print_r( $data, true );
+            }
+            error_log( $log );
+        }
+    }
 
     /**
      * Intercepts only when the user returns from the bank to the Order Received (Thank You) page.
@@ -60,6 +71,8 @@ class Destination_Sep_Gateway {
         global $wp;
         $order_id = 0;
 
+        $this->log_debug( 'Hit order-received endpoint.', array( 'request_uri' => $_SERVER['REQUEST_URI'] ?? '' ) );
+
         // Extract order ID from WooCommerce query vars or URL parameters.
         if ( isset( $wp->query_vars['order-received'] ) ) {
             $order_id = intval( $wp->query_vars['order-received'] );
@@ -70,23 +83,30 @@ class Destination_Sep_Gateway {
         $order = null;
         if ( $order_id ) {
             $order = wc_get_order( $order_id );
+            $this->log_debug( 'Attempted order lookup by ID.', array( 'order_id' => $order_id, 'found' => (bool)$order ) );
         } elseif ( isset( $_GET['key'] ) ) {
             $order_key   = sanitize_text_field( $_GET['key'] );
             $resolved_id = wc_get_order_id_by_order_key( $order_key );
+            $this->log_debug( 'Attempted order lookup by key.', array( 'order_key' => $order_key, 'resolved_id' => $resolved_id ) );
             if ( $resolved_id ) {
                 $order = wc_get_order( $resolved_id );
             }
         }
 
         if ( ! $order ) {
+            $this->log_debug( 'ERROR: Could not resolve WooCommerce order instance from request.' );
             return;
         }
 
+        $this->log_debug( 'Order successfully resolved.', array( 'order_id' => $order->get_id(), 'status' => $order->get_status() ) );
+
         // Retrieve source redirect metadata.
         $source_redirect_url = $order->get_meta( '_source_redirect_url' );
+        $this->log_debug( 'Retrieved meta _source_redirect_url.', array( 'url' => $source_redirect_url ) );
 
         // If no source redirect URL is stored, let the normal WooCommerce thank you page render.
         if ( empty( $source_redirect_url ) ) {
+            $this->log_debug( 'Skipping redirection: _source_redirect_url is empty.' );
             return;
         }
 
@@ -94,11 +114,15 @@ class Destination_Sep_Gateway {
         $verify_rest_url = $this->get_source_rest_api_url( $source_redirect_url, $order_key );
 
         // Trigger the remote API verification request.
+        $this->log_debug( 'Initiating remote verification request.', array( 'verify_url' => $verify_rest_url ) );
         $verification_result = $this->send_remote_verification( $verify_rest_url );
 
         if ( is_wp_error( $verification_result ) ) {
+            $this->log_debug( 'ERROR: Remote verification failed.', array( 'error_message' => $verification_result->get_error_message() ) );
             return $verification_result;
         }
+
+        $this->log_debug( 'Remote verification passed successfully.' );
 
         $redirect_url = add_query_arg(
             array(
@@ -108,6 +132,8 @@ class Destination_Sep_Gateway {
             $source_redirect_url
         );
 
+        $this->log_debug( 'Executing final cross-domain redirect.', array( 'final_redirect_url' => $redirect_url ) );
+
         // Perform cross-domain redirect back to source site.
         wp_redirect( esc_url_raw( $redirect_url ) );
         exit;
@@ -115,10 +141,6 @@ class Destination_Sep_Gateway {
 
     /**
      * Constructs target REST API URL back to the source site.
-     *
-     * @param string $source_redirect_url
-     * @param string $order_key
-     * @return string
      */
     private function get_source_rest_api_url( $source_redirect_url, $order_key ) {
         $parsed_url      = parse_url( $source_redirect_url );
@@ -138,19 +160,23 @@ class Destination_Sep_Gateway {
 
     /**
      * Sends the remote GET request to verify the order and handles errors.
-     *
-     * @param string $verify_rest_url
-     * @return true|WP_Error
      */
     private function send_remote_verification( $verify_rest_url ) {
-        $response = wp_remote_get( $verify_rest_url );
+        $response = wp_remote_get( $verify_rest_url, array( 'timeout' => 15 ) );
 
         if ( is_wp_error( $response ) ) {
+            $this->log_debug( 'wp_remote_get returned WP_Error.', array( 'message' => $response->get_error_message() ) );
             return $response;
         }
 
         $status        = wp_remote_retrieve_response_code( $response );
-        $response_body = json_decode( wp_remote_retrieve_body( $response ), true );
+        $response_body_raw = wp_remote_retrieve_body( $response );
+        $response_body = json_decode( $response_body_raw, true );
+
+        $this->log_debug( 'Remote verification response received.', array(
+            'response_code' => $status,
+            'body'          => $response_body_raw
+        ) );
 
         if ( $status < 200 || $status >= 300 ) {
             return new WP_Error(
@@ -163,14 +189,13 @@ class Destination_Sep_Gateway {
         return true;
     }
 
-
     public function plugin_admin_notice() {
         if ( ! current_user_can( 'activate_plugins' ) ) {
             return;
         }
         ?>
         <div class="notice notice-success is-dismissible">
-            <p><?php esc_html_e( 'Simple Custom Plugin is active and running smoothly.', 'simple-custom-plugin' ); ?></p>
+            <p><?php esc_html_e( 'VSPP Sep Destination Terminal is active and running smoothly.', 'simple-custom-plugin' ); ?></p>
         </div>
         <?php
     }
@@ -180,7 +205,7 @@ class Destination_Sep_Gateway {
      */
     public static function activate() {
         if ( ! get_option( 'destination_sep_gateway_version' ) ) {
-            add_option( 'destination_sep_gateway_version', '1.2.0' );
+            add_option( 'destination_sep_gateway_version', '2.1.0' );
         }
         flush_rewrite_rules();
     }
@@ -192,11 +217,7 @@ class Destination_Sep_Gateway {
         flush_rewrite_rules();
     }
 
-    /**
-     * Runs once when the plugin is deleted (uninstalled) via the admin dashboard.
-     */
     public static function uninstall() {
-        // Security check: Ensure WordPress is actually executing the uninstall process
         if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
             return;
         }
@@ -206,7 +227,6 @@ class Destination_Sep_Gateway {
     }
 }
 
-// Register lifecycle hooks
 register_activation_hook( __FILE__, array( 'Destination_Sep_Gateway', 'activate' ) );
 register_deactivation_hook( __FILE__, array( 'Destination_Sep_Gateway', 'deactivate' ) );
 register_uninstall_hook( __FILE__, array( 'Destination_Sep_Gateway', 'uninstall' ) );
