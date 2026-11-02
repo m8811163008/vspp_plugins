@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name: Source Sep Gateway backup
+ * Plugin Name: VSPP Sep Source Terminal
  * Description: A lightweight, secure boilerplate plugin following WordPress best practices.
- * Version:     1.4.5
+ * Version:     1.4.7
  * Author:      Vira System Paydar Pars and Gemini
  * Author URI:  http://vira-system-paydar-pars.ir/
  * License:     GPLv2 or later
@@ -186,7 +186,7 @@ function register_source_sep_gateway_class() {
                 "meta_data" => [
                     [
                         'key'   => '_source_order_id',
-                        'value' => $order->get_id()
+                        'value' => $order->get_id(),
                         'key'   => '_source_redirect_url',
                         'value' => 'https://payment.vira-system-paydar-pars.ir/%d9%be%d8%b1%d8%af%d8%a7%d8%ae%d8%aa/order-received/216/?key=wc_order_j5VFgUfT8qrad&wc_status=success'
                     ]
