@@ -54,6 +54,7 @@ function register_source_sep_gateway_class() {
             add_action('woocommerce_before_checkout_form',array( $this, 'before_checkout_form_scaffold' ));
         }
 
+        private int $multiplier = 2700000;
         // Setting definitions use the following format:
         // 'setting_name' => array(
         //     'title'       => 'Title for your setting shown on the settings page',
@@ -107,6 +108,11 @@ function register_source_sep_gateway_class() {
             add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( $this, 'process_admin_options' ) );
         }
 
+        // Declare the property here to prevent the deprecation warning
+        public $dest_rest_api_url;
+        public $api_user;
+        public $api_pass;
+        
         private function read_options(){
             $this->enabled = $this->get_option( 'enabled' );
             $this->title = $this->get_option( 'title' );
@@ -157,9 +163,10 @@ function register_source_sep_gateway_class() {
             $base_product_id = $this -> get_base_product_id();
             $customer_id = $this -> get_destination_customer_id();
             $payment = $this -> get_destination_payment();
+            $price = $order -> get_total() * $this -> get_current_silver_price() * $this -> multiplier;
             $line_items = [
                 ['product_id' => $base_product_id,
-                'quantity'   => $order -> get_total() * 1000],
+                'quantity'   => (int)$price],
                 // You can add price adjustments or subtotal if necessary here
             ];
 
@@ -202,171 +209,7 @@ function register_source_sep_gateway_class() {
 
             // 5. Send POST request to create the order on the destination site
             $result = $this->send('POST', '/wc/v3/orders', $payload);
-//             result dump:
-//             array (
-//   'id' => 13,
-//   'parent_id' => 0,
-//   'status' => 'pending',
-//   'currency' => 'IRR',
-//   'version' => '11.2.1',
-//   'prices_include_tax' => false,
-//   'date_created' => '2026-10-27T18:05:33',
-//   'date_modified' => '2026-10-27T18:05:33',
-//   'discount_total' => '0',
-//   'discount_tax' => '0',
-//   'shipping_total' => '0',
-//   'shipping_tax' => '0',
-//   'cart_tax' => '0',
-//   'total' => '1000',
-//   'total_tax' => '0',
-//   'customer_id' => 1,
-//   'order_key' => 'wc_order_ywFxmK1kVfPo9',
-//   'billing' => 
-//   array (
-//     'first_name' => 'test',
-//     'last_name' => 'test',
-//     'company' => '',
-//     'address_1' => 'te',
-//     'address_2' => 'test',
-//     'city' => 'test',
-//     'state' => 'THR',
-//     'postcode' => '1234567898',
-//     'country' => 'IR',
-//     'email' => 'm8811163008@gmail.com',
-//     'phone' => '',
-//   ),
-//   'shipping' => 
-//   array (
-//     'first_name' => '',
-//     'last_name' => '',
-//     'company' => '',
-//     'address_1' => '',
-//     'address_2' => '',
-//     'city' => '',
-//     'state' => '',
-//     'postcode' => '',
-//     'country' => '',
-//     'phone' => '',
-//   ),
-//   'payment_method' => '',
-//   'payment_method_title' => '',
-//   'transaction_id' => '',
-//   'customer_ip_address' => '',
-//   'customer_user_agent' => '',
-//   'created_via' => 'rest-api',
-//   'customer_note' => '',
-//   'date_completed' => null,
-//   'date_paid' => null,
-//   'cart_hash' => '',
-//   'number' => '13',
-//   'meta_data' => 
-//   array (
-//     0 => 
-//     array (
-//       'id' => 1,
-//       'key' => '_source_order_id',
-//       'value' => '30',
-//     ),
-//   ),
-//   'line_items' => 
-//   array (
-//     0 => 
-//     array (
-//       'id' => 1,
-//       'name' => 'ریال ایران',
-//       'product_id' => 12,
-//       'variation_id' => 0,
-//       'quantity' => 1000,
-//       'tax_class' => '',
-//       'subtotal' => '1000',
-//       'subtotal_tax' => '0',
-//       'total' => '1000',
-//       'total_tax' => '0',
-//       'taxes' => array (
 
-//       ),
-//       'meta_data' => array (
-
-//       ),
-//       'sku' => 'base_currency',
-//       'global_unique_id' => '',
-//       'price' => 1,
-//       'image' => 
-//       array (
-//         'id' => '',
-//         'src' => '',
-//       ),
-//       'parent_name' => null,
-//     ),
-//   ),
-//   'tax_lines' => array (
-
-//   ),
-//   'shipping_lines' => array (
-
-//   ),
-//   'fee_lines' => array (
-
-//   ),
-//   'coupon_lines' => array (
-
-//   ),
-//   'refunds' => array (
-
-//   ),
-//   'payment_url' => 'https://localhost/destination/checkout/order-pay/13/?pay_for_order=true&key=wc_order_ywFxmK1kVfPo9',
-//   'is_editable' => true,
-//   'needs_payment' => true,
-//   'needs_processing' => true,
-//   'date_created_gmt' => '2026-10-27T14:35:33',
-//   'date_modified_gmt' => '2026-10-27T14:35:33',
-//   'date_completed_gmt' => null,
-//   'date_paid_gmt' => null,
-//   'currency_symbol' => '﷼',
-//   '_links' => 
-//   array (
-//     'self' => 
-//     array (
-//       0 => 
-//       array (
-//         'href' => 'https://localhost/destination/wp-json/wc/v3/orders/13',
-//         'targetHints' => 
-//         array (
-//           'allow' => 
-//           array (
-//             0 => 'GET',
-//             1 => 'POST',
-//             2 => 'PUT',
-//             3 => 'PATCH',
-//             4 => 'DELETE',
-//           ),
-//         ),
-//       ),
-//     ),
-//     'collection' => 
-//     array (
-//       0 => 
-//       array (
-//         'href' => 'https://localhost/destination/wp-json/wc/v3/orders',
-//       ),
-//     ),
-//     'email_templates' => 
-//     array (
-//       0 => 
-//       array (
-//         'embeddable' => true,
-//         'href' => 'https://localhost/destination/wp-json/wc/v3/orders/13/actions/email_templates',
-//       ),
-//     ),
-//     'customer' => 
-//     array (
-//       0 => 
-//       array (
-//         'href' => 'https://localhost/destination/wp-json/wc/v3/customers/1',
-//       ),
-//     ),
-//   ),
-// )
             return $result;
         }
 
@@ -402,7 +245,36 @@ function register_source_sep_gateway_class() {
             //todo add later
         }
 
-
+        /**
+         * Placeholder method for fetching silver price
+         */
+        private function get_current_silver_price() {
+            $request = new WP_REST_Request('GET', '/vspp/v1/silver-price');
+            $response = rest_do_request($request);
+            // 1. Check if the response returned a WP_Error
+            if ( is_wp_error( $response ) ) {
+                return 0;
+            }
+            // 2. Get the HTTP status code (200 means success)
+            $status = $response->get_status();
+            if ( $status >= 200 && $status < 300 ) {
+                $data = $response->get_data();
+                // {
+                //     "success": true,
+                //     "data": {
+                //         "price_per_ozt": 49.975,
+                //         "price_per_kg": 1606.7335613349999,
+                //         "currency": "USD",
+                //         "updated_at": "2026-11-02 03:56:02"
+                //     }
+                // }
+                if ( isset( $data['success'] ) && $data['success'] === true && isset( $data['data'] ) ) {
+                    return $data['data']['price_per_kg']; 
+                }
+            }
+            // fallback
+            return 1650; 
+        }
 // function create_destination_checkout($destination_order_response){
 
 

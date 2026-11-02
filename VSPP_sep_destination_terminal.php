@@ -2,7 +2,7 @@
 /**
  * Plugin Name: VSPP Sep Destination Terminal
  * Description: VSPP Sep Destination Terminal to catch request from source terminal and handle some payment processes.
- * Version:     1.5.0
+ * Version:     2.0.0
  * Author:      Vira System Paydar Pars and Gemini
  * Author URI:  http://vira-system-paydar-pars.ir/
  * License:     GPLv2 or later
