@@ -28,7 +28,8 @@ class VSPP_Fulfiller_Automator {
      * Register custom REST API endpoint: POST /wp-json/vspp/v1/fulfill
      */
     public function register_webhook_endpoint() {
-        register_rest_route( 'vspp/v1', '/fulfill', array(
+        //'myplugin/v1', '/submit-data/'
+        register_rest_route( 'vspp/v1', '/fulfill/', array(
             'methods'             => 'POST',
             'callback'            => array( $this, 'handle_webhook_request' ),
             'permission_callback' => '__return_true',

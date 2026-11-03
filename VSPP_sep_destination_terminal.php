@@ -2,7 +2,7 @@
 /**
  * Plugin Name: VSPP Sep Destination Terminal
  * Description: VSPP Sep Destination Terminal to catch request from source terminal and handle some payment processes with built-in debugging.
- * Version:     2.1.0
+ * Version:     2.3.2
  * Author:      Vira System Paydar Pars and Gemini
  * Author URI:  http://vira-system-paydar-pars.ir/
  * License:     GPLv2 or later
@@ -21,7 +21,9 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Main Plugin Class
  */
 class Destination_Sep_Gateway {
-
+// redirect from https://payment.vira-system-paydar-pars.ir/%d9%be%d8%b1%d8%af%d8%a7%d8%ae%d8%aa/order-pay/253/?pay_for_order=true&key=wc_order_PwwH1T6trLyOt
+// to bank 
+// https://payment.vira-system-paydar-pars.ir/%d9%be%d8%b1%d8%af%d8%a7%d8%ae%d8%aa/order-received/253/?key=wc_order_PwwH1T6trLyOt&wc_status=success
     private static $instance = null;
 
     public static function get_instance() {
@@ -58,9 +60,13 @@ class Destination_Sep_Gateway {
             error_log( $log );
         }
     }
+//TODO handle https://payment.vira-system-paydar-pars.ir/%d9%be%d8%b1%d8%af%d8%a7%d8%ae%d8%aa/order-pay/257/?pay_for_order=true&key=wc_order_zy4xAA8CtS0X5
+// we should update the checkout based on this so when the user cancle the payment when
+//  it return to checkout the checkout page filled with this order
 
-    /**
-     * Intercepts only when the user returns from the bank to the Order Received (Thank You) page.
+/**
+     * Intercepts only when the user returns from the bank to the Order Received (Thank You) page,
+     * triggers the synchronization endpoint on the source site, and redirects the user back.
      */
     public function handle_gateway_return_redirect() {
         // Ensure WooCommerce is active and we are on the order-received endpoint.
@@ -83,7 +89,7 @@ class Destination_Sep_Gateway {
         $order = null;
         if ( $order_id ) {
             $order = wc_get_order( $order_id );
-            $this->log_debug( 'Attempted order lookup by ID.', array( 'order_id' => $order_id, 'found' => (bool)$order ) );
+            $this->log_debug( 'Attempted order lookup by ID.', array( 'order_id' => $order_id, 'found' => (bool) $order ) );
         } elseif ( isset( $_GET['key'] ) ) {
             $order_key   = sanitize_text_field( $_GET['key'] );
             $resolved_id = wc_get_order_id_by_order_key( $order_key );
@@ -100,42 +106,71 @@ class Destination_Sep_Gateway {
 
         $this->log_debug( 'Order successfully resolved.', array( 'order_id' => $order->get_id(), 'status' => $order->get_status() ) );
 
-        // Retrieve source redirect metadata.
-        $source_redirect_url = $order->get_meta( '_source_redirect_url' );
-        $this->log_debug( 'Retrieved meta _source_redirect_url.', array( 'url' => $source_redirect_url ) );
+        // Retrieve stored redirect and sync metadata from destination order
+        $redirect_url_to_source = $order->get_meta( '_redirect_url_to_source_checkout' );
+        $sync_endpoint_url      = $order->get_meta( '_sync_orders_endpoint_on_source' );
 
-        // If no source redirect URL is stored, let the normal WooCommerce thank you page render.
-        if ( empty( $source_redirect_url ) ) {
-            $this->log_debug( 'Skipping redirection: _source_redirect_url is empty.' );
+//      Build an associative array of all order metadata for debugging inspection
+        $all_meta_data = array();
+        foreach ( $order->get_meta_data() as $meta ) {
+            // $meta->key and $meta->value contain the meta info
+            $all_meta_data[ $meta->key ] = $meta->value;
+        }
+
+        $this->log_debug( 'Inspecting order metadata dump.', array(
+            'order_id'               => $order->get_id(),
+            'target_redirect_meta'   => $redirect_url_to_source,
+            'target_sync_meta'       => $sync_endpoint_url,
+            'all_available_meta'     => $all_meta_data,
+        ) );
+
+        if ( empty( $redirect_url_to_source ) ) {
+            $this->log_debug( 'Skipping redirection: _redirect_url_to_source_checkout meta is empty.' );
             return;
         }
+        $source_order_id = $order->get_meta( '_source_order_id' );
 
-        $order_key       = $order->get_order_key();
-        $verify_rest_url = $this->get_source_rest_api_url( $source_redirect_url, $order_key );
+        // 1. Trigger the remote GET synchronization request back to the source site
+        if ( ! empty( $sync_endpoint_url ) && ! empty( $source_order_id ) ) {
+            $sync_request_url = add_query_arg(
+                array(
+                    'source_order_id' => $source_order_id,
+                ),
+                $sync_endpoint_url
+            );
 
-        // Trigger the remote API verification request.
-        $this->log_debug( 'Initiating remote verification request.', array( 'verify_url' => $verify_rest_url ) );
-        $verification_result = $this->send_remote_verification( $verify_rest_url );
+            $this->log_debug( 'Initiating remote order synchronization GET request.', array( 'sync_url' => $sync_request_url ) );
 
-        if ( is_wp_error( $verification_result ) ) {
-            $this->log_debug( 'ERROR: Remote verification failed.', array( 'error_message' => $verification_result->get_error_message() ) );
-            return $verification_result;
+            $response = wp_remote_get( esc_url_raw( $sync_request_url ), array(
+                'timeout'   => 15,
+                'sslverify' => true,
+            ) );
+
+            if ( is_wp_error( $response ) ) {
+                $this->log_debug( 'ERROR: Remote order synchronization failed.', array( 'error_message' => $response->get_error_message() ) );
+            } else {
+                $response_code = wp_remote_retrieve_response_code( $response );
+                $response_body = wp_remote_retrieve_body( $response );
+                $this->log_debug( 'Remote order synchronization response received.', array(
+                    'response_code' => $response_code,
+                    'response_body' => $response_body,
+                ) );
+            }
         }
 
-        $this->log_debug( 'Remote verification passed successfully.' );
-
-        $redirect_url = add_query_arg(
+        // 2. Append destination order key and status to the final redirect URL back to source
+        $final_redirect_url = add_query_arg(
             array(
+                'destination_order_key' => $order->get_order_key(),
                 'status'                => $order->get_status(),
-                'destination_order_key' => $order_key,
             ),
-            $source_redirect_url
+            $redirect_url_to_source
         );
 
-        $this->log_debug( 'Executing final cross-domain redirect.', array( 'final_redirect_url' => $redirect_url ) );
+        $this->log_debug( 'Executing final cross-domain redirect.', array( 'final_redirect_url' => $final_redirect_url ) );
 
         // Perform cross-domain redirect back to source site.
-        wp_redirect( esc_url_raw( $redirect_url ) );
+        wp_redirect( esc_url_raw( $final_redirect_url ) );
         exit;
     }
 

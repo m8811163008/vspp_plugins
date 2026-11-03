@@ -56,7 +56,8 @@ class VSPP_Silver_Price_Plugin {
      * Register REST API GET endpoint
      */
     public function register_rest_endpoint() {
-        register_rest_route( 'vspp/v1', '/silver-price', array(
+        //'myplugin/v1', '/submit-data/'
+        register_rest_route( 'vspp/v1', '/silver-price/', array(
             'methods'             => 'GET',
             'callback'            => array( $this, 'get_rest_silver_price' ),
             'permission_callback' => '__return_true', // Public endpoint (cached internally to prevent API abuse)

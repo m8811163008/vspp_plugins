@@ -36,7 +36,8 @@ class WP_Dynamic_OpenAPI {
      * Register the custom endpoint to output the OpenAPI JSON spec.
      */
     public function register_openapi_route() {
-        register_rest_route( 'wp-dynamic-openapi/v1', '/spec', [
+        //'myplugin/v1', '/submit-data/'
+        register_rest_route( 'wp-dynamic-openapi/v1', '/spec/', [
             'methods'             => 'GET',
             'callback'            => [ $this, 'generate_openapi_spec' ],
             'permission_callback' => '__return_true',

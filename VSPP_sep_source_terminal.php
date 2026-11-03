@@ -17,6 +17,104 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+
+add_action( 'rest_api_init', 'register_verification_rest_route' );
+/**
+ * Register the REST API endpoint that the source site will call.
+ */
+function register_verification_rest_route() {
+    //'myplugin/v1', '/submit-data/'
+    register_rest_route(
+        'source-gateway/v1',
+        '/sync_order/',
+        array(
+            'methods'             => 'GET',
+            'callback'            => 'handle_verification_rest_endpoint',
+            'permission_callback' => '__return_true', // Adjust permission/authentication if needed
+        )
+    );
+}
+
+/**
+ * Handles the incoming REST API request from the source site to verify and sync order status.
+ * 
+ * @param WP_REST_Request $request
+ * @return WP_REST_Response
+ */
+function handle_verification_rest_endpoint( WP_REST_Request $request ) {
+    $source_order_id = $request->get_param( 'source_order_id' );
+
+    // 1. Validate required parameter
+    if ( empty( $source_order_id ) ) {
+        return new WP_REST_Response( array(
+            'success' => false,
+            'message' => 'Missing source_order_id parameter.',
+        ), 400 );
+    }
+
+    // 2. Fetch source order locally
+    $source_order = wc_get_order( $source_order_id );
+
+    if ( ! $source_order ) {
+        return new WP_REST_Response( array(
+            'success' => false,
+            'message' => 'Order not found on source site.',
+        ), 404 );
+    }
+
+    // 3. Search destination orders via API
+    $result = $this->send( 'GET', '/wc/v3/orders', array(
+            'meta_key'   => '_source_order_id',
+            'meta_value' => (string) $source_order_id,
+        ) );
+
+
+    // 4. Verify API response structure
+    if ( empty( $result['data'] ) || ! is_array( $result['data'] ) ) {
+        return new WP_REST_Response( array(
+            'success' => false,
+            'message' => 'Destination order not found or invalid response received.',
+        ), 404 );
+    }
+
+    // Grab the first matching destination order
+    $destination_order = $result['data'][0] ?? null;
+
+    if ( ! $destination_order || empty( $destination_order['status'] ) ) {
+        return new WP_REST_Response( array(
+            'success' => false,
+            'message' => 'Destination order status could not be retrieved.',
+        ), 400 );
+    }
+
+    $dest_status = $destination_order['status'];
+
+    // 5. Update local source order status based on destination order status
+    if ( in_array( $dest_status, array( 'processing', 'completed' ), true ) ) {
+        if ( ! $source_order->is_paid() ) {
+            // Complete payment and add transaction reference if available
+            $transaction_id = $destination_order['transaction_id'] ?? '';
+            $source_order->payment_complete( $transaction_id );
+        }
+        $source_order->update_status( $dest_status, __( 'Status synced from destination order.', 'text-domain' ) );
+    } else {
+        $source_order->update_status( $dest_status, __( 'Status updated from destination order.', 'text-domain' ) );
+    }
+
+    $source_order->save();
+
+    return new WP_REST_Response( array(
+        'success' => true,
+        'message' => 'Order status synced successfully.',
+        'status'  => $source_order->get_status(),
+    ), 200 );
+}
+
+
+
+
+
+
 add_action( 'plugins_loaded', 'register_source_sep_gateway_class' );
 function register_source_sep_gateway_class() {
     if ( ! class_exists( 'WC_Payment_Gateway' ) ) {
@@ -51,6 +149,7 @@ function register_source_sep_gateway_class() {
             $this->init_settings();
             $this->register_save_options_action_hook();
             $this->read_options();
+            
             add_action('woocommerce_before_checkout_form',array( $this, 'before_checkout_form_scaffold' ));
         }
 
@@ -122,39 +221,91 @@ function register_source_sep_gateway_class() {
             $this->api_pass = $this->get_option( 'api_pass' );
         }
 
-        // add a method to return payload base on if aleady exist or not and if exist update else create new
-        // $payload = [
-        //                 'email'      => $user->user_email,
-        //                 'first_name' => get_user_meta($user_id, 'first_name', true),
-        //                 'last_name'  => get_user_meta($user_id, 'last_name', true),
-        //                 'username'   => $user->user_login,
-        //                 'billing'    => [
-        //                     'first_name' => get_user_meta($user_id, 'billing_first_name', true),
-        //                     'last_name'  => get_user_meta($user_id, 'billing_last_name', true),
-        //                     'company'    => get_user_meta($user_id, 'billing_company', true),
-        //                     'address_1'  => get_user_meta($user_id, 'billing_address_1', true),
-        //                     'address_2'  => get_user_meta($user_id, 'billing_address_2', true),
-        //                     'city'       => get_user_meta($user_id, 'billing_city', true),
-        //                     'state'      => get_user_meta($user_id, 'billing_state', true),
-        //                     'postcode'   => get_user_meta($user_id, 'billing_postcode', true),
-        //                     'country'    => get_user_meta($user_id, 'billing_country', true),
-        //                     'email'      => $user->user_email,
-        //                     'phone'      => get_user_meta($user_id, 'billing_phone', true),
-        //                 ],
-        //                 'shipping'   => [
-        //                     'first_name' => get_user_meta($user_id, 'shipping_first_name', true),
-        //                     'last_name'  => get_user_meta($user_id, 'shipping_last_name', true),
-        //                     'company'    => get_user_meta($user_id, 'shipping_company', true),
-        //                     'address_1'  => get_user_meta($user_id, 'shipping_address_1', true),
-        //                     'address_2'  => get_user_meta($user_id, 'shipping_address_2', true),
-        //                     'city'       => get_user_meta($user_id, 'shipping_city', true),
-        //                     'state'      => get_user_meta($user_id, 'shipping_state', true),
-        //                     'postcode'   => get_user_meta($user_id, 'shipping_postcode', true),
-        //                     'country'    => get_user_meta($user_id, 'shipping_country', true),
-        //                     'phone'      => get_user_meta($user_id, 'shipping_phone', true),
-        //                 ],
-        //             ];
+        function process_payment( $order_id ) {
+            global $woocommerce;
+            $order = new WC_Order( $order_id );
 
+            if ( ! $order ) {
+                wc_add_notice(
+                    __( 'Unable to find the order. Please try again.', 'source-sep-gateway' ),
+                    'error'
+                );
+
+                return array(
+                    'result' => 'failure',
+                );
+            }
+
+            // Start the remote payment request here. Do not mark the order paid yet.
+            $order->update_status(
+                'pending',
+                __( 'Redirecting customer to payment provider.', 'source-sep-gateway' )
+            );
+
+            $this->ensure_registration( $order );
+            
+            // create order on destination website via rest api
+            $destination_order_response = $this -> create_destination_order($order);
+
+
+            // $destination_chekout = $this -> create_destination_checkout( $destination_order_response);
+
+            // create the checkout on destination
+
+            // redirect to destination checkout for payment
+            // $url = $this->get_destination_checkout_redirect_url($order, $destination_order['id']);
+
+//TODO FLOW THE SILVERS ON EARTH FOR SOME FELLOW SAID FOR MORE SAFTY AND AUTHENTICATION AND 
+//  ALLAH SAID BEKHANDID 
+
+            return array(
+                'result' => 'success',
+                'redirect' => $destination_order_response["payment_url"]
+            );
+            
+
+            // Awaiting payment: pending
+            // Awaiting manual/delayed confirmation: on-hold
+            // Provider confirms payment: $order->payment_complete();
+            // Provider confirms failure: $order->update_status( 'failed', '...' );
+
+
+
+            // change status 
+            // Mark as on-hold (we're awaiting the cheque)
+            // $order->update_status(\Automattic\WooCommerce\Enums\OrderStatus::ON_HOLD, __( 'Awaiting cheque payment', 'woocommerce' ));
+            
+            // payment compeleted
+            // if ( $order->is_paid() ) {
+            //     return; // Already handled; make the callback idempotent.
+            // }
+            // $order->payment_complete();
+
+            // payment error
+            // wc_add_notice( __('Payment error:', 'woothemes') . $error_message, 'error' );
+            // return array(
+            //     'result'   => 'failure'
+            // );
+
+            // updating payment status 
+            // $order = new WC_Order( $order_id );
+            // $order->update_status(\Automattic\WooCommerce\Enums\OrderStatus::ON_HOLD, __('Awaiting cheque payment', 'woothemes'));
+            // or add note $order->add_order_note( __('IPN payment completed', 'woothemes') );
+
+
+
+            // if ( WC()->cart ) {
+            //     WC()->cart->empty_cart();
+            // }
+
+
+            // Return thankyou redirect
+            // return array(
+            //     'result' => 'success',
+            //     'redirect' => $this->get_return_url( $order )
+            // );
+
+        }
         
         function create_destination_order($order){
             
@@ -194,8 +345,14 @@ function register_source_sep_gateway_class() {
                     [
                         'key'   => '_source_order_id',
                         'value' => $order->get_id(),
-                        'key'   => '_source_redirect_url',
-                        'value' => 'https://payment.vira-system-paydar-pars.ir/%d9%be%d8%b1%d8%af%d8%a7%d8%ae%d8%aa/order-received/216/?key=wc_order_j5VFgUfT8qrad&wc_status=success'
+                    ],
+                    [
+                        'key'   => '_redirect_url_to_source_checkout',
+                        'value' => $order->get_checkout_order_received_url(),
+                    ],
+                    [
+                        'key'   => '_sync_orders_endpoint_on_source',
+                        'value' => rest_url('source-gateway/v1/sync_order/'),
                     ]
                 ],
                 "line_items"           => $line_items,
@@ -275,248 +432,7 @@ function register_source_sep_gateway_class() {
             // fallback
             return 1650; 
         }
-// function create_destination_checkout($destination_order_response){
 
-
-
-
-//             // get base curency product 
-//             // create order on desti
-//             $base_product_id = $this -> get_base_product_id();
-//             $customer_id = $this -> get_destination_customer_id();
-//             $payment = $this -> get_destination_payment();
-            
-
-
-//             // to prevent duplication
-//             // foreach ($order->get_shipping_methods() as $shipping_item) {
-//             //     $shipping_lines[] = [
-//             //         'method_id'   => $shipping_item->get_method_id(),
-//             //         'method_title'=> $shipping_item->get_name(),
-//             //         'total'       => (string) $shipping_item->get_total(),
-//             //     ];
-//             // }
-
-//             // 4. Build the payload for the destination API
-
-// //             {
-// //   "payment_data": "string",
-// //   "customer_note": "string",
-// //   "billing_address": "string",
-// //   "shipping_address": "string",
-// //   "payment_method": "string",
-// //   "additional_fields": "string",
-// //   "extensions": {
-// //     "woocommerce/order-attribution": []
-// //   }
-// // }
-
-// // {
-// //   "additional_fields": "string",
-// //   "payment_method": "string",
-// //   "order_notes": "string",
-// //   "customer_note": "string",
-// //   "billing_address": "string",
-// //   "shipping_address": "string",
-// //   "create_account": true,
-// //   "extensions": "string"
-// // }
-// $source_order_id = null;
-// if (!empty($destination_order_response['meta_data'])) {
-//     foreach ($destination_order_response['meta_data'] as $meta) {
-//         if (isset($meta['key']) && $meta['key'] === '_source_order_id') {
-//             $source_order_id = $meta['value'];
-//             break;
-//         }
-//     }
-// }
-
-// $payload = [
-//     'additional_fields'   => [
-//                     [
-//                         'key'   => '_source_order_id',
-//                         'value' => $source_order_id
-//                     ]
-//                 ],
-//     'payment_method'    => $destination_order_response["payment_method"],
-//     'order_notes'      => "", // Pass any gateway-specific custom fields if required
-//     'customer_note'     => $destination_order_response["customer_note"],
-//     'billing_address' =>  $destination_order_response["billing"],
-//     'shipping_address' => $destination_order_response["shipping"],
-//     'create_account'     => false,
-//     'extensions'        => []
-// ];
-
-
-//             // 5. Send POST request to create the order on the destination site
-//             $result = $this->send('POST', '/wc/store/v1/checkout', $payload);
-// //             result dump:
-// //             array (
-// //   'id' => 13,
-// //   'parent_id' => 0,
-// //   'status' => 'pending',
-// //   'currency' => 'IRR',
-// //   'version' => '11.2.1',
-// //   'prices_include_tax' => false,
-// //   'date_created' => '2026-10-27T18:05:33',
-// //   'date_modified' => '2026-10-27T18:05:33',
-// //   'discount_total' => '0',
-// //   'discount_tax' => '0',
-// //   'shipping_total' => '0',
-// //   'shipping_tax' => '0',
-// //   'cart_tax' => '0',
-// //   'total' => '1000',
-// //   'total_tax' => '0',
-// //   'customer_id' => 1,
-// //   'order_key' => 'wc_order_ywFxmK1kVfPo9',
-// //   'billing' => 
-// //   array (
-// //     'first_name' => 'test',
-// //     'last_name' => 'test',
-// //     'company' => '',
-// //     'address_1' => 'te',
-// //     'address_2' => 'test',
-// //     'city' => 'test',
-// //     'state' => 'THR',
-// //     'postcode' => '1234567898',
-// //     'country' => 'IR',
-// //     'email' => 'm8811163008@gmail.com',
-// //     'phone' => '',
-// //   ),
-// //   'shipping' => 
-// //   array (
-// //     'first_name' => '',
-// //     'last_name' => '',
-// //     'company' => '',
-// //     'address_1' => '',
-// //     'address_2' => '',
-// //     'city' => '',
-// //     'state' => '',
-// //     'postcode' => '',
-// //     'country' => '',
-// //     'phone' => '',
-// //   ),
-// //   'payment_method' => '',
-// //   'payment_method_title' => '',
-// //   'transaction_id' => '',
-// //   'customer_ip_address' => '',
-// //   'customer_user_agent' => '',
-// //   'created_via' => 'rest-api',
-// //   'customer_note' => '',
-// //   'date_completed' => null,
-// //   'date_paid' => null,
-// //   'cart_hash' => '',
-// //   'number' => '13',
-// //   'meta_data' => 
-// //   array (
-// //     0 => 
-// //     array (
-// //       'id' => 1,
-// //       'key' => '_source_order_id',
-// //       'value' => '30',
-// //     ),
-// //   ),
-// //   'line_items' => 
-// //   array (
-// //     0 => 
-// //     array (
-// //       'id' => 1,
-// //       'name' => 'ریال ایران',
-// //       'product_id' => 12,
-// //       'variation_id' => 0,
-// //       'quantity' => 1000,
-// //       'tax_class' => '',
-// //       'subtotal' => '1000',
-// //       'subtotal_tax' => '0',
-// //       'total' => '1000',
-// //       'total_tax' => '0',
-// //       'taxes' => array (
-
-// //       ),
-// //       'meta_data' => array (
-
-// //       ),
-// //       'sku' => 'base_currency',
-// //       'global_unique_id' => '',
-// //       'price' => 1,
-// //       'image' => 
-// //       array (
-// //         'id' => '',
-// //         'src' => '',
-// //       ),
-// //       'parent_name' => null,
-// //     ),
-// //   ),
-// //   'tax_lines' => array (
-
-// //   ),
-// //   'shipping_lines' => array (
-
-// //   ),
-// //   'fee_lines' => array (
-
-// //   ),
-// //   'coupon_lines' => array (
-
-// //   ),
-// //   'refunds' => array (
-
-// //   ),
-// //   'payment_url' => 'https://localhost/destination/checkout/order-pay/13/?pay_for_order=true&key=wc_order_ywFxmK1kVfPo9',
-// //   'is_editable' => true,
-// //   'needs_payment' => true,
-// //   'needs_processing' => true,
-// //   'date_created_gmt' => '2026-10-27T14:35:33',
-// //   'date_modified_gmt' => '2026-10-27T14:35:33',
-// //   'date_completed_gmt' => null,
-// //   'date_paid_gmt' => null,
-// //   'currency_symbol' => '﷼',
-// //   '_links' => 
-// //   array (
-// //     'self' => 
-// //     array (
-// //       0 => 
-// //       array (
-// //         'href' => 'https://localhost/destination/wp-json/wc/v3/orders/13',
-// //         'targetHints' => 
-// //         array (
-// //           'allow' => 
-// //           array (
-// //             0 => 'GET',
-// //             1 => 'POST',
-// //             2 => 'PUT',
-// //             3 => 'PATCH',
-// //             4 => 'DELETE',
-// //           ),
-// //         ),
-// //       ),
-// //     ),
-// //     'collection' => 
-// //     array (
-// //       0 => 
-// //       array (
-// //         'href' => 'https://localhost/destination/wp-json/wc/v3/orders',
-// //       ),
-// //     ),
-// //     'email_templates' => 
-// //     array (
-// //       0 => 
-// //       array (
-// //         'embeddable' => true,
-// //         'href' => 'https://localhost/destination/wp-json/wc/v3/orders/13/actions/email_templates',
-// //       ),
-// //     ),
-// //     'customer' => 
-// //     array (
-// //       0 => 
-// //       array (
-// //         'href' => 'https://localhost/destination/wp-json/wc/v3/customers/1',
-// //       ),
-// //     ),
-// //   ),
-// // )
-//             return $result;
-//         }
 
 
         function ensure_registration( $order ) {
@@ -550,278 +466,12 @@ function register_source_sep_gateway_class() {
                 $this -> send( 'GET', '/wp/v2/users',$user_data );
                 //todo later log in user when redirect from the source
             }
-            // at this point we are sure that the user exist so
-            // create checkout for this source order 
-
-
-            // $payload = [
-            //     'email'      => $user_email,
-            //     'first_name' => $order->get_billing_first_name(),
-            //     'last_name'  => $order->get_billing_last_name(),
-            //     'billing'    => $order->get_address('billing'),
-            //     'shipping'   => $order->get_address('shipping'),
-            // ];
-            // // update destination customers 
-            // return $this->send( 'PUT', '/wc/v3/customers/' . absint( $existing_customer['id'] ), $payload );
-
-            // // $existing_customers = $this->send( 'GET', '/wc/v3/customers?email=' . urlencode( $user_email ) );
-            // $existing_customers = $this->send( 'GET', '/wp/v2/users?email=' . urlencode( 'test@test.test' ) );
-            // if ( is_wp_error( $existing_customers ) ) {
-            //     return $existing_customers;
-            // }
-            // if ( ! is_array( $existing_customers ) ) {
-            //     return new WP_Error( 'invalid_customer_response', __( 'The destination returned an invalid customer lookup response.', 'source-sep-gateway' ) );
-            // }
-
-            // foreach ( $existing_customers as $existing_customer ) {
-            //     if (
-            //         isset( $existing_customer['id'], $existing_customer['email'] )
-            //         && strtolower( $existing_customer['email'] ) === strtolower( $user_email )
-            //     ) {
-            //         return $this->send( 'PUT', '/wc/v3/customers/' . absint( $existing_customer['id'] ), $payload );
-            //     }
-            // }
-
-            // return $this->send( 'POST', '/wc/v3/customers', $payload );
-        }
-
-        // function get_destination_checkout_redirect_url($order, $destination_order_id) {
-        //     $result = $this -> send('GET', '/wc/v3/settings/advanced');
-        //     $woocommerce_checkout_page_setting ;
-        //     // copoilet : for each for result id
-        //     foreach ($result as $item) {
-        //         if (isset($item['id']) && $item['id'] === 'woocommerce_checkout_page_id') {
-        //             $woocommerce_checkout_page_setting = $item; // Returns the full array for that setting item
-        //         }
-        //     }
-        //     $woocommerce_checkout_page_id = $woocommerce_checkout_page_setting['value'];
-        //     // send Get GET https://shop.example/wp-json/wp/v2/pages/{page_id}
-        //     $checkout_page = $this -> send('GET', '/wp/v2/pages/' . $woocommerce_checkout_page_id);
-        //     $checkout_page['link'];
-        //     $base_link = rtrim( $checkout_page['link'], '/' ); // Removes trailing slash if present
-        //     $order_id  = $order->get_id(); // Use WC_Abstract_Order::get_id() for compatibility
-
-        //     // Result: https://destination-site.com/wc/store/v1/checkout/123
-        //     $link = $base_link . '/' . $destination_order_id;
-        //     // Append order reference if $order_id is provided
-        //     $link = add_query_arg('order_ref', $order -> id, $link);
-                
-        //     return $link;
-        // }
-
-        // function destination_url():string|WP_Error {
-        //     $parts = wp_parse_url( $this->dest_rest_api_url );
-
-        //     if ( empty( $parts['scheme'] ) || empty( $parts['host'] ) ) {
-        //         return new WP_Error( 'invalid_destination_url', 'The destination REST API URL is invalid.' );
-        //     }
-
-        //     return $destination_url = $parts['scheme'] . '://' . $parts['host'];
-        // }
-
-        function process_payment( $order_id ) {
-            global $woocommerce;
-            $order = new WC_Order( $order_id );
-
-            if ( ! $order ) {
-                wc_add_notice(
-                    __( 'Unable to find the order. Please try again.', 'source-sep-gateway' ),
-                    'error'
-                );
-
-                return array(
-                    'result' => 'failure',
-                );
-            }
-
-            // final class OrderStatus {
-            // 	/**
-            // 	 * The order has been received, but no payment has been made.
-            // 	 *
-            // 	 * @var string
-            // 	 */
-            // 	public const PENDING = 'pending';
-
-            // 	/**
-            // 	 * The customer’s payment failed or was declined, and no payment has been successfully made.
-            // 	 *
-            // 	 * @var string
-            // 	 */
-            // 	public const FAILED = 'failed';
-
-            // 	/**
-            // 	 * The order is awaiting payment confirmation.
-            // 	 *
-            // 	 * @var string
-            // 	 */
-            // 	public const ON_HOLD = 'on-hold';
-
-            // 	/**
-            // 	 * Order fulfilled and complete.
-            // 	 *
-            // 	 * @var string
-            // 	 */
-            // 	public const COMPLETED = 'completed';
-
-            // 	/**
-            // 	 * Payment has been received (paid), and the stock has been reduced.
-            // 	 *
-            // 	 * @var string
-            // 	 */
-            // 	public const PROCESSING = 'processing';
-
-            // 	/**
-            // 	 * Orders are automatically put in the Refunded status when an admin or shop manager has fully refunded the order’s value after payment.
-            // 	 *
-            // 	 * @var string
-            // 	 */
-            // 	public const REFUNDED = 'refunded';
-
-            // 	/**
-            // 	 * The order was canceled by an admin or the customer.
-            // 	 *
-            // 	 * @var string
-            // 	 */
-            // 	public const CANCELLED = 'cancelled';
-
-
-            // 	/**
-            // 	 * Checkout Draft orders are created when customers start the checkout process while the block version of the checkout is in place.
-            // 	 *
-            // 	 * @var string
-            // 	 */
-            // 	public const CHECKOUT_DRAFT = 'checkout-draft';
-
-            // 	/**
-            // 	 * Array of all the valid order statuses for a complete payment.
-            // 	 *
-            // 	 * @var string[]
-            // 	 */
-            // 	public const PAYMENT_COMPLETE_STATUSES = array(
-            // 		self::ON_HOLD,
-            // 		self::PENDING,
-            // 		self::FAILED,
-            // 		self::CANCELLED,
-            // 	);
-
-            // 	/**
-            // 	 * Returns every order status value defined by this enum, as a flat list of unprefixed slugs.
-            // 	 *
-            // 	 * It differs from the statuses WooCommerce registers in both directions. It carries
-            // 	 * self::TRASH, self::NEW, self::AUTO_DRAFT and self::DRAFT, which wc_get_order_statuses() does
-            // 	 * not return by default, and it cannot carry statuses an extension registers.
-            // 	 * WC_Abstract_Order::set_status() accepts self::TRASH and self::AUTO_DRAFT even so, exempting
-            // 	 * them from its own validation.
-            // 	 *
-            // 	 * self::CHECKOUT_DRAFT sits on the helper's side of that line: WooCommerce adds it through the
-            // 	 * `wc_order_statuses` filter, and the Store API assigns it to live orders during checkout.
-            // 	 *
-            // 	 * For the registered statuses, use wc_get_order_statuses(). It returns a value => label map
-            // 	 * keyed on the `wc-` prefixed slug, so comparing its keys with this enum's values needs
-            // 	 * OrderUtil::remove_status_prefix(). OrderInternalStatus lists the seven core statuses in
-            // 	 * prefixed form.
-            // 	 *
-            // 	 * @since 10.9.0
-            // 	 *
-            // 	 * @return string[]
-            // 	 */
-            // 	public static function get_all(): array {
-            // 		return array(
-            // 			self::PENDING,
-            // 			self::FAILED,
-            // 			self::ON_HOLD,
-            // 			self::COMPLETED,
-            // 			self::PROCESSING,
-            // 			self::REFUNDED,
-            // 			self::CANCELLED,
-            // 			self::TRASH,
-            // 			self::NEW,
-            // 			self::AUTO_DRAFT,
-            // 			self::DRAFT,
-            // 			self::CHECKOUT_DRAFT,
-            // 		);
-            // 	}
-            // }
-            
-        
-        
-        
-            // use Automattic\WooCommerce\Enums\OrderStatus;
-            // Start the remote payment request here. Do not mark the order paid yet.
-            $order->update_status(
-                'pending',
-                __( 'Redirecting customer to payment provider.', 'source-sep-gateway' )
-            );
-            // add some rest api to destination website by app password header 
-            // create customer on destination website by woocomerce rest api
-
-            // create the user
-            
-            // populate checkout fields billing shipping checkout form fields
-            $this->ensure_registration( $order );
-            // create order on destination website 
-
-            $destination_order_response = $this -> create_destination_order($order);
-
-
-            // $destination_chekout = $this -> create_destination_checkout( $destination_order_response);
-
-            // create the checkout on destination
-
-            // redirect to destination checkout for payment
-            // $url = $this->get_destination_checkout_redirect_url($order, $destination_order['id']);
-
-//TODO FLOW THE SILVERS ON EARTH FOR SOME FELLOW SAID FOR MORE SAFTY AND AUTHENTICATION AND 
-//  ALLAH SAID BEKHANDID 
-
-            return array(
-                'result' => 'success',
-                'redirect' => $destination_order_response["payment_url"]
-            );
-            
-
-            // Awaiting payment: pending
-            // Awaiting manual/delayed confirmation: on-hold
-            // Provider confirms payment: $order->payment_complete();
-            // Provider confirms failure: $order->update_status( 'failed', '...' );
-
-
-
-            // change status 
-            // Mark as on-hold (we're awaiting the cheque)
-            // $order->update_status(\Automattic\WooCommerce\Enums\OrderStatus::ON_HOLD, __( 'Awaiting cheque payment', 'woocommerce' ));
-            
-            // payment compeleted
-            // if ( $order->is_paid() ) {
-            //     return; // Already handled; make the callback idempotent.
-            // }
-            // $order->payment_complete();
-
-            // payment error
-            // wc_add_notice( __('Payment error:', 'woothemes') . $error_message, 'error' );
-            // return array(
-            //     'result'   => 'failure'
-            // );
-
-            // updating payment status 
-            // $order = new WC_Order( $order_id );
-            // $order->update_status(\Automattic\WooCommerce\Enums\OrderStatus::ON_HOLD, __('Awaiting cheque payment', 'woothemes'));
-            // or add note $order->add_order_note( __('IPN payment completed', 'woothemes') );
-
-
-
-            // if ( WC()->cart ) {
-            //     WC()->cart->empty_cart();
-            // }
-
-
-            // Return thankyou redirect
-            // return array(
-            //     'result' => 'success',
-            //     'redirect' => $this->get_return_url( $order )
-            // );
 
         }
+
+
+
+
 
 
         public function before_checkout_form_scaffold() {
@@ -954,7 +604,9 @@ function register_source_sep_gateway_class() {
                 'Content-Type'  => 'application/json',
                 'Accept'        => 'application/json',
             ];
-        }   
+        }
+
+
         
     }
 }
