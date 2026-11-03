@@ -1,0 +1,32 @@
+.woocommerce .woocommerce-customer-details .woocommerce-customer-details--email::before {
+    font-family: WooCommerce;
+    speak: never;
+    font-weight: 400;
+    font-variant: normal;
+    text-transform: none;
+    line-height: 1;
+    -webkit-font-smoothing: antialiased;
+    margin-left: .618em;
+    content: "\e02d";
+    text-decoration: none;
+    margin-right: -1.5em;
+    line-height: 1.75;
+    position: absolute;
+}
+
+phone::before {
+    /* direction: ltr; */
+    font-family: WooCommerce;
+    speak: never;
+    font-weight: 400;
+    font-variant: normal;
+    text-transform: none;
+    line-height: 1;
+    -webkit-font-smoothing: antialiased;
+    margin-left: .618em;
+    content: "\e037";
+    text-decoration: none;
+    margin-right: -1.5em;
+    line-height: 1.75;
+    position: absolute;
+}

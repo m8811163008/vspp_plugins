@@ -3,7 +3,7 @@
  * Plugin Name: VSPP WooCommerce BACS Addon
  * Plugin URI: https://vira-system-paydar-pars.ir
  * Description: Show product price value based on BACS account multipliers
- * Version: 1.3.1
+ * Version: 1.4.1
  * Author: Vira System Paydar Pars
  * License: GPLv2 or later
  */
@@ -112,10 +112,13 @@ class VSPP_WooCommerce_BACS_Addon {
                     var total = orderTotal * silverPrice * multiplier;
                     total = Math.round(total / 1000) * 1000;
 
-                    const accountNameHeading = document.querySelector('.wc-bacs-bank-details-account-name');
+                    // Select ALL account name headings instead of just the first one
+                    const accountNameHeadings = document.querySelectorAll('.wc-bacs-bank-details-account-name');
 
-                    if (accountNameHeading) {
-                        accountNameHeading.textContent +=  ' ریال ' + total;
+                    if (accountNameHeadings.length > 0) {
+                        accountNameHeadings.forEach(function(heading) {
+                            heading.textContent += ' ریال ' + total;
+                        });
                     }
                 });
             </script>
