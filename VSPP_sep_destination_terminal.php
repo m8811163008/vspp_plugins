@@ -2,7 +2,7 @@
 /**
  * Plugin Name: VSPP Sep Destination Terminal
  * Description: VSPP Sep Destination Terminal to catch request from source terminal and handle some payment processes with built-in debugging.
- * Version:     2.3.2
+ * Version:     2.3.5
  * Author:      Vira System Paydar Pars and Gemini
  * Author URI:  http://vira-system-paydar-pars.ir/
  * License:     GPLv2 or later
@@ -128,16 +128,18 @@ class Destination_Sep_Gateway {
             $this->log_debug( 'Skipping redirection: _redirect_url_to_source_checkout meta is empty.' );
             return;
         }
-        $source_order_id = $order->get_meta( '_source_order_id' );
-
+        $source_order_key = $order->get_meta( '_source_order_key' );
+        $this->log_debug( 'Trigger the remote GET synchronization request.', array( 'sync_endpoint_url' => $sync_endpoint_url, 'source_order_key' => $source_order_key ) );
         // 1. Trigger the remote GET synchronization request back to the source site
-        if ( ! empty( $sync_endpoint_url ) && ! empty( $source_order_id ) ) {
+        if ( ! empty( $sync_endpoint_url ) && ! empty( $source_order_key ) ) {
             $sync_request_url = add_query_arg(
                 array(
-                    'source_order_id' => $source_order_id,
+                    'destination_order_id' => $order->get_id(),
                 ),
                 $sync_endpoint_url
             );
+
+                    
 
             $this->log_debug( 'Initiating remote order synchronization GET request.', array( 'sync_url' => $sync_request_url ) );
 
@@ -161,13 +163,19 @@ class Destination_Sep_Gateway {
         // 2. Append destination order key and status to the final redirect URL back to source
         $final_redirect_url = add_query_arg(
             array(
-                'destination_order_key' => $order->get_order_key(),
+                // 'destination_order_key' => $order->get_order_key(),
+                // 'destination_order_id' => $order->get_id(),
                 'status'                => $order->get_status(),
             ),
             $redirect_url_to_source
         );
 
-        $this->log_debug( 'Executing final cross-domain redirect.', array( 'final_redirect_url' => $final_redirect_url ) );
+        $this->log_debug( 'Executing final cross-domain redirect.', array( 
+            'final_redirect_url' => $final_redirect_url,
+            'destination_order_key' => $order->get_order_key(),
+            'destination_order_id' => $order->get_id(),
+            'status'                => $order->get_status(),
+             ) );
 
         // Perform cross-domain redirect back to source site.
         wp_redirect( esc_url_raw( $final_redirect_url ) );

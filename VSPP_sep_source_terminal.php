@@ -2,7 +2,7 @@
 /**
  * Plugin Name: VSPP Sep Source Terminal
  * Description: A lightweight, secure boilerplate plugin following WordPress best practices.
- * Version:     1.4.7
+ * Version:     1.4.9
  * Author:      Vira System Paydar Pars and Gemini
  * Author URI:  http://vira-system-paydar-pars.ir/
  * License:     GPLv2 or later
@@ -29,88 +29,11 @@ function register_verification_rest_route() {
         '/sync_order/',
         array(
             'methods'             => 'GET',
-            'callback'            => 'handle_verification_rest_endpoint',
+            'callback'            => array( 'Source_Sep_Gateway', 'handle_verification_rest_endpoint' ),
             'permission_callback' => '__return_true', // Adjust permission/authentication if needed
         )
     );
 }
-
-/**
- * Handles the incoming REST API request from the source site to verify and sync order status.
- * 
- * @param WP_REST_Request $request
- * @return WP_REST_Response
- */
-function handle_verification_rest_endpoint( WP_REST_Request $request ) {
-    $source_order_id = $request->get_param( 'source_order_id' );
-
-    // 1. Validate required parameter
-    if ( empty( $source_order_id ) ) {
-        return new WP_REST_Response( array(
-            'success' => false,
-            'message' => 'Missing source_order_id parameter.',
-        ), 400 );
-    }
-
-    // 2. Fetch source order locally
-    $source_order = wc_get_order( $source_order_id );
-
-    if ( ! $source_order ) {
-        return new WP_REST_Response( array(
-            'success' => false,
-            'message' => 'Order not found on source site.',
-        ), 404 );
-    }
-
-    // 3. Search destination orders via API
-    $result = $this->send( 'GET', '/wc/v3/orders', array(
-            'meta_key'   => '_source_order_id',
-            'meta_value' => (string) $source_order_id,
-        ) );
-
-
-    // 4. Verify API response structure
-    if ( empty( $result['data'] ) || ! is_array( $result['data'] ) ) {
-        return new WP_REST_Response( array(
-            'success' => false,
-            'message' => 'Destination order not found or invalid response received.',
-        ), 404 );
-    }
-
-    // Grab the first matching destination order
-    $destination_order = $result['data'][0] ?? null;
-
-    if ( ! $destination_order || empty( $destination_order['status'] ) ) {
-        return new WP_REST_Response( array(
-            'success' => false,
-            'message' => 'Destination order status could not be retrieved.',
-        ), 400 );
-    }
-
-    $dest_status = $destination_order['status'];
-
-    // 5. Update local source order status based on destination order status
-    if ( in_array( $dest_status, array( 'processing', 'completed' ), true ) ) {
-        if ( ! $source_order->is_paid() ) {
-            // Complete payment and add transaction reference if available
-            $transaction_id = $destination_order['transaction_id'] ?? '';
-            $source_order->payment_complete( $transaction_id );
-        }
-        $source_order->update_status( $dest_status, __( 'Status synced from destination order.', 'text-domain' ) );
-    } else {
-        $source_order->update_status( $dest_status, __( 'Status updated from destination order.', 'text-domain' ) );
-    }
-
-    $source_order->save();
-
-    return new WP_REST_Response( array(
-        'success' => true,
-        'message' => 'Order status synced successfully.',
-        'status'  => $source_order->get_status(),
-    ), 200 );
-}
-
-
 
 
 
@@ -167,6 +90,108 @@ function register_source_sep_gateway_class() {
         //         'key' => 'value'
         //     ),
         // )
+
+        /**
+         * Helper function to write clean debug messages to wp-content/debug.log
+         */
+        private function log_debug( $message, $data = null ) {
+            if ( WP_DEBUG === true ) {
+                $log = '[VSPP Debug] ' . $message;
+                if ( null !== $data ) {
+                    $log .= ' | Data: ' . print_r( $data, true );
+                }
+                error_log( $log );
+            }
+        }
+
+/**
+         * Handles the incoming REST API request from the source site to verify and sync order status.
+         * 
+         * @param WP_REST_Request $request
+         * @return WP_REST_Response
+         */
+        public static function handle_verification_rest_endpoint( WP_REST_Request $request ) {
+            $gateway = new self();
+            $source_order_key = $request->get_param( 'source_order_key' );
+
+            $gateway->log_debug( 'Verification request received', array( 'source_order_key' => $source_order_key ) );
+
+            // 1. Validate required parameter
+            if ( empty( $source_order_key ) ) {
+                $gateway->log_debug( 'Validation failed: Missing source_order_key parameter.' );
+                return new WP_REST_Response( array(
+                    'success' => false,
+                    'message' => 'Missing source_order_key parameter.',
+                ), 400 );
+            }
+
+            // 2. Fetch source order locally
+            $source_order = wc_get_order( $source_order_key );
+
+            if ( ! $source_order ) {
+                $gateway->log_debug( 'Source order not found locally', array( 'source_order_key' => $source_order_key ) );
+                return new WP_REST_Response( array(
+                    'success' => false,
+                    'message' => 'Order not found on source site.',
+                ), 404 );
+            }
+
+            // 3. Search destination orders via API
+            $result = $gateway->send( 'GET', '/wc/v3/orders', array(
+                    'search'   => '_source_order_key',
+                ) );
+
+            $gateway->log_debug( 'Destination order search API response received', $result );
+
+            // 4. Verify API response structure
+            if ( empty( $result['data'] ) || ! is_array( $result['data'] ) ) {
+                $gateway->log_debug( 'Destination order not found or invalid response structure received', $result );
+                return new WP_REST_Response( array(
+                    'success' => false,
+                    'message' => 'Destination order not found or invalid response received.',
+                ), 404 );
+            }
+
+            // Grab the first matching destination order
+            $destination_order = $result['data'][0] ?? null;
+
+            if ( ! $destination_order || empty( $destination_order['status'] ) ) {
+                $gateway->log_debug( 'Destination order status could not be retrieved', array( 'destination_order' => $destination_order ) );
+                return new WP_REST_Response( array(
+                    'success' => false,
+                    'message' => 'Destination order status could not be retrieved.',
+                ), 400 );
+            }
+
+            $dest_status = $destination_order['status'];
+            $gateway->log_debug( 'Destination order status successfully retrieved', array( 'dest_status' => $dest_status ) );
+
+            // 5. Update local source order status based on destination order status
+            if ( in_array( $dest_status, array( 'processing', 'completed' ), true ) ) {
+                if ( ! $source_order->is_paid() ) {
+                    // Complete payment and add transaction reference if available
+                    $transaction_id = $destination_order['transaction_id'] ?? '';
+                    $gateway->log_debug( 'Completing source order payment', array( 'transaction_id' => $transaction_id ) );
+                    $source_order->payment_complete( $transaction_id );
+                }
+                $gateway->log_debug( 'Updating source order status to paid/complete state', array( 'dest_status' => $dest_status ) );
+                $source_order->update_status( $dest_status, __( 'Status synced from destination order.', 'text-domain' ) );
+            } else {
+                $gateway->log_debug( 'Updating source order status to alternate state', array( 'dest_status' => $dest_status ) );
+                $source_order->update_status( $dest_status, __( 'Status updated from destination order.', 'text-domain' ) );
+            }
+
+            $source_order->save();
+            $gateway->log_debug( 'Order status sync completed successfully', array( 'final_status' => $source_order->get_status() ) );
+
+            return new WP_REST_Response( array(
+                'success' => true,
+                'message' => 'Order status synced successfully.',
+                'status'  => $source_order->get_status(),
+            ), 200 );
+        }
+
+
         public function init_form_fields() {
             $this->form_fields = array(
                 'enabled'     => array( 'title' => 'Enable', 'type' => 'checkbox', 'label' => 'Enable Gateway', 'default' => 'yes' ),
@@ -343,8 +368,10 @@ function register_source_sep_gateway_class() {
                 "transaction_id"       => "",
                 "meta_data" => [
                     [
-                        'key'   => '_source_order_id',
-                        'value' => $order->get_id(),
+                        // Get the corresponding Order ID
+                        // $order_id = wc_get_order_id_by_order_key( $order_key );
+                        'key'   => '_source_order_key',
+                        'value' => $order->get_order_key(),
                     ],
                     [
                         'key'   => '_redirect_url_to_source_checkout',
